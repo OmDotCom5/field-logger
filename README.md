@@ -10,13 +10,13 @@ A browser only allows the microphone and offline use on a page from an `https://
 
 **1. Host the folder (once).** Any static HTTPS host works. With a free GitHub account:
 
-1. Create a repository, e.g. `field-logger`, and upload every file in this folder (keep the `icons` folder).
+1. Create a repository, e.g. `field-logger`, and upload every file in this folder.
 2. In the repository: *Settings, Pages*, set *Source* to the `main` branch, root folder, and save.
 3. After a minute the app is at `https://<your-username>.github.io/field-logger/`.
 
 A company intranet server with HTTPS would work the same way and keep it in-house.
 
-**2. Install on each tablet (once).** With a connection, open that address in Chrome, then *menu (⋮), Add to Home screen* (or *Install app*). Allow the microphone when first asked. From then on, open it from the home screen icon. It works in flight mode.
+**2. Install on each tablet (once).** With a connection, open that address in Chrome, then *menu (⋮), Add to Home screen* (or *Install app*). Allow the microphone when first asked. Wait until the top of the screen says **Ready offline ✓**; from then on, open it from the home screen icon and it works in flight mode.
 
 **Updates:** change the files on the host. Tablets pick up the new version the next time the app is opened with a connection.
 
@@ -50,6 +50,6 @@ Keep the app on screen while logging. The screen stays awake, but switching to a
 | `app.js` | Logging, storage on the device, audio, export |
 | `recorder-worklet.js` | Hands microphone samples to `app.js` |
 | `sw.js` | Keeps a copy on the device so it opens offline |
-| `manifest.webmanifest`, `icons/` | Lets it be installed to the home screen |
+| `manifest.webmanifest`, `icon-192.png`, `icon-512.png` | Lets it be installed to the home screen |
 
 To try it on the laptop, run `.venv\Scripts\python.exe -m http.server 8765 --directory field_logger` from the `Code` folder and open `http://localhost:8765` (`localhost` counts as secure, so the microphone works). The desktop import is tested in `tests\test_field_logger.py` against an export made by this page.

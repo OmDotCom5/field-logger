@@ -643,6 +643,21 @@ async function resumeUnfinished() {
   // from the moment the page closed until now.
   const open = (await loadSessions()).find((s) => !s.stoppedMs);
   if (!open) return;
+  // Ask rather than assume: a session left open yesterday shouldn't quietly
+  // carry on today. Ending it closes it at the last thing it recorded.
+  const lastMs = Math.max(open.liveStartMs,
+    ...open.observations.map((o) => open.liveStartMs + (o.elapsed_end ?? o.elapsed_start) * 1000),
+    open.audio && open.audio.startMs !== null
+      ? open.audio.startMs + (open.audio.samples / open.audio.sampleRate) * 1000 : 0);
+  const ago = fmtElapsed((Date.now() - lastMs) / 1000);
+  if (!confirm(`A session started at ${sessionLabel(open)} was still running when the app closed ` +
+               `(last activity ${ago} ago).\n\nOK: carry on logging it.\n` +
+               `Cancel: end it at its last activity and keep it in Saved sessions.`)) {
+    open.stoppedMs = lastMs;
+    await saveSession(open);
+    await renderSessions();
+    return;
+  }
   session = open;
   rangeStart = pauseStart = null;
   renderObservations();
@@ -676,8 +691,31 @@ async function resumeAudio() {
   }
 }
 
+// Whether this device holds a complete copy of the app, so the operator knows
+// before going on site that it will open with no connection.
+let offlineReady = false;
+const ESSENTIAL_FILES = ['./', 'index.html', 'app.js', 'recorder-worklet.js'];
+
+async function checkOfflineReady() {
+  try {
+    if (!('caches' in window)) return;
+    const cache = await caches.open('field-logger');
+    const hits = await Promise.all(ESSENTIAL_FILES.map((f) => cache.match(new URL(f, location.href).href)));
+    offlineReady = hits.every(Boolean);
+  } catch (e) { offlineReady = false; }
+  updateOfflineState();
+}
+
 function updateOfflineState() {
-  $('offline-state').textContent = navigator.onLine ? '' : 'Offline';
+  const el = $('offline-state');
+  if (offlineReady) {
+    el.textContent = navigator.onLine ? 'Ready offline ✓' : 'Offline ✓';
+    el.style.color = 'var(--ok)';
+  } else {
+    el.textContent = navigator.onLine ? 'Saving for offline use…'
+                                      : 'Offline: not fully saved, reconnect once';
+    el.style.color = navigator.onLine ? '' : 'var(--danger)';
+  }
 }
 
 async function main() {
@@ -709,7 +747,11 @@ async function main() {
     return;
   }
   if ('serviceWorker' in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js')
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => { checkOfflineReady(); setTimeout(checkOfflineReady, 3000); })
+      .catch(() => {});
+    checkOfflineReady();
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   await renderSessions();
@@ -717,6 +759,6 @@ async function main() {
 }
 
 // Exposed for automated checks; not used by the page itself.
-window.fieldLogger = { backupPayload, buildExport, localIso };
+window.fieldLogger = { backupPayload, buildExport, localIso, resumeUnfinished, loadSessions };
 
 main();
