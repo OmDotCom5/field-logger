@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Field Logger</title>
+<meta name="description" content="Logs noise observations and audio on site, offline, for the Acoustic Monitoring Software.">
+<meta name="theme-color" content="#1c222e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f4f6f9; --panel: #ffffff; --ink: #1c2230; --muted: #5d6677;
+    --line: #d6dbe3; --accent: #4f5de8; --accent-ink: #ffffff;
+    --danger: #d6455b; --ok: #2e8540; --warn: #c27b00; --chip: #eef0f7;
+    --chip-on: #4f5de8; --chip-on-ink: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161f; --panel: #1c222e; --ink: #e8ebf2; --muted: #9aa3b5;
+      --line: #313a4c; --accent: #6b78f0; --accent-ink: #fff;
+      --danger: #e5677b; --ok: #4fb36a; --warn: #e0a030; --chip: #262e3d;
+      --chip-on: #6b78f0; --chip-on-ink: #fff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: 16px; padding-bottom: 40px; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 17px; margin: 0 0 10px; color: var(--muted); font-weight: 600; }
+  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .bar .spacer { flex: 1; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px; margin-bottom: 14px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 12px; padding: 12px 18px; min-height: 52px; cursor: pointer; touch-action: manipulation; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+  button.danger { background: var(--danger); color: #fff; border-color: var(--danger); font-weight: 700; }
+  button.big { min-height: 96px; font-size: 22px; font-weight: 800; letter-spacing: .02em; }
+  button.small { min-height: 40px; padding: 6px 12px; font-size: 15px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 200px; }
+  .timer { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; line-height: 1.1; }
+  .state { text-align: center; color: var(--muted); font-weight: 600; }
+  .state.live { color: var(--ok); }
+  .state.paused { color: var(--warn); }
+  .chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .chip { background: var(--chip); min-height: 60px; font-weight: 600; }
+  .chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-ink); border-color: var(--chip-on); }
+  textarea, input[type=text] { width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  textarea { min-height: 76px; resize: vertical; }
+  label.check { display: flex; align-items: center; gap: 12px; min-height: 52px; font-weight: 600; }
+  label.check input { width: 28px; height: 28px; accent-color: var(--danger); }
+  .meter { height: 14px; border-radius: 7px; background: var(--chip); overflow: hidden; margin-top: 6px; }
+  .meter > div { height: 100%; width: 0; background: var(--ok); transition: width .1s linear; }
+  .audio-line { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 15px; }
+  .audio-line .meter { flex: 1; margin: 0; }
+  ul.obs { list-style: none; margin: 0; padding: 0; }
+  ul.obs li { border-top: 1px solid var(--line); padding: 10px 2px; display: flex; gap: 10px; align-items: flex-start; }
+  ul.obs li:first-child { border-top: 0; }
+  ul.obs .when { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 112px; }
+  ul.obs .what { flex: 1; }
+  ul.obs .cat { color: var(--muted); font-size: 15px; }
+  ul.obs .excl { color: var(--danger); font-weight: 700; font-size: 14px; }
+  .muted { color: var(--muted); }
+  .note { font-size: 15px; color: var(--muted); }
+  .banner { border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; font-weight: 600; }
+  .banner.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--ink); }
+  .banner.err { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--ink); }
+  .hidden { display: none !important; }
+  table.sessions { width: 100%; border-collapse: collapse; }
+  table.sessions td { border-top: 1px solid var(--line); padding: 10px 6px; vertical-align: middle; }
+  table.sessions td.actions { text-align: right; white-space: nowrap; }
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink);
+    width: min(560px, 92vw); padding: 18px; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .help p { margin: 6px 0 10px; }
+  @media (max-width: 640px) { .timer { font-size: 48px; } button.big { min-height: 80px; font-size: 19px; } }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1>Field Logger</h1>
+    <span class="spacer"></span>
+    <span id="offline-state" class="note"></span>
+    <button class="small" id="btn-help">Help</button>
+  </div>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <!-- ── Not logging: start a session, list saved sessions ── -->
+  <section id="view-start">
+    <div class="panel">
+      <h2>New session</h2>
+      <div class="row">
+        <div>
+          <label for="session-name" class="muted">Name (optional), e.g. the site or position</label>
+          <input type="text" id="session-name" autocomplete="off" placeholder="e.g. North boundary, position 1">
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="audio-enabled" checked> Record audio as a timing reference</label>
+      <p class="note">Press Start at the same moment you start the sound level meter. The audio is not a
+        measurement; it lets you line observations up with the sounds afterwards.</p>
+      <button class="primary big" id="btn-start" style="width:100%">START LOGGING</button>
+    </div>
+
+    <div class="panel">
+      <h2>Saved sessions</h2>
+      <p id="no-sessions" class="note">None yet. Finished sessions stay here, on this device, until you delete them.</p>
+      <table class="sessions"><tbody id="session-rows"></tbody></table>
+    </div>
+  </section>
+
+  <!-- ── Logging ── -->
+  <section id="view-live" class="hidden">
+    <div class="panel">
+      <div class="timer" id="timer">0:00</div>
+      <div class="state live" id="live-state">Logging</div>
+      <div class="audio-line" id="audio-line">
+        <span id="audio-text">Audio off</span>
+        <button class="small primary hidden" id="btn-resume-audio">Resume audio</button>
+        <div class="meter"><div id="audio-meter"></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>What can you hear? <span class="note">(tap one or more; none = General)</span></h2>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="panel">
+      <label for="note" class="muted">Description (optional; you can add it after logging)</label>
+      <textarea id="note" placeholder="e.g. Truck reversing, beeper audible"></textarea>
+      <label class="check"><input type="checkbox" id="exclude"> Exclude from assessment (e.g. operator talking, wind on the microphone)</label>
+    </div>
+
+    <div class="row">
+      <button class="primary big" id="btn-moment">LOG MOMENT</button>
+      <button class="big" id="btn-range">START RANGE</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="btn-pause">Pause logging</button>
+      <button class="danger" id="btn-stop">Stop session</button>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>Logged so far <span class="note">(tap one to edit)</span></h2>
+      <ul class="obs" id="obs-list"></ul>
+      <p id="no-obs" class="note">Nothing logged yet.</p>
+    </div>
+  </section>
+
+  <!-- ── Edit an observation ── -->
+  <dialog id="edit-dialog">
+    <h2 id="edit-title">Observation</h2>
+    <label for="edit-note" class="muted">Description</label>
+    <textarea id="edit-note"></textarea>
+    <div class="chips" id="edit-chips" style="margin:10px 0"></div>
+    <label class="check"><input type="checkbox" id="edit-exclude"> Exclude from assessment</label>
+    <div class="row" style="margin-top:10px">
+      <button class="danger" id="edit-delete">Delete</button>
+      <button id="edit-cancel">Cancel</button>
+      <button class="primary" id="edit-save">Save</button>
+    </div>
+  </dialog>
+
+  <!-- ── Help ── -->
+  <dialog id="help-dialog" class="help">
+    <h2>Using the Field Logger</h2>
+    <p><b>Works offline.</b> Once installed (open it once with internet, then use the browser's
+      <i>Add to Home screen</i> or <i>Install app</i>), it needs no connection on site. Everything stays on this device.</p>
+    <p><b>Start</b> at the same moment you start the sound level meter. <b>Log moment</b> stamps the time
+      the instant you tap it; type a description before or after. <b>Start range</b> / <b>End range</b>
+      marks something that lasts. <b>Pause</b> marks the paused time as excluded.</p>
+    <p><b>Exclude</b> anything that should not count in the assessment, such as you talking or wind on the
+      microphone. It is still kept and shown, just left out of the assessed figures.</p>
+    <p><b>Keep this screen open</b> while logging. The screen is kept awake, but switching to another app
+      can stop the audio recording on some tablets.</p>
+    <p><b>Afterwards</b>, tap <i>Export</i> on the session and move the .zip file to the laptop (USB, email,
+      cloud drive). In the Acoustic Monitoring Software use <i>Import</i> and choose the .zip; the session and
+      its audio appear ready to bind to the meter's file, exactly like a session logged on the laptop.</p>
+    <div class="row"><button class="primary" id="help-close">Close</button></div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
