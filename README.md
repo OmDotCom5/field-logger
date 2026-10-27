@@ -22,10 +22,11 @@ A company intranet server with HTTPS would work the same way and keep it in-hous
 
 ## On site
 
-1. Open Field Logger, type a name for the position if you like, and press **START LOGGING** at the same moment you start the meter.
-2. Tap categories, type a note if you have time, and press **LOG MOMENT** (the time is taken the instant you tap). Use **START RANGE / END RANGE** for something that lasts, **Exclude** for anything that shouldn't count, and **Pause** to mark a break.
-3. Tap an entry in the list to fix its note, categories or exclusion.
-4. Press **Stop session** when the meter stops.
+1. Open Field Logger. Type a name for the position and the planned length if you like, and fill in **Site and job details** (job, client, location, operator, meter, calibration, weather, noise environment). The job, client, operator, meter and calibrator are remembered for the next position.
+2. Press **START LOGGING** at the same moment you start the meter. With a planned length set, the screen counts down and the tablet vibrates and flashes (silently) when the time is up.
+3. Tap categories, type a note if you have time, and press **LOG MOMENT** (the time is taken the instant you tap). Use **START RANGE / END RANGE** for something that lasts, **Exclude** for anything that shouldn't count, and **Pause** to mark a break.
+4. Tap an entry to fix its note, categories or exclusion, or to **add a photo**. Press **▶** to listen to the few seconds around it (use headphones while logging, or the meter hears the playback). **Site details** stays editable during the session, including photos of the measurement position.
+5. Press **Stop session** when the meter stops. The session opens for **review**: listen back and fill in notes, then export. **Review** in Saved sessions opens it again later.
 
 Keep the app on screen while logging. The screen stays awake, but switching to another app can stop the audio on some tablets. If the app is closed by accident, reopening it carries on the same session with every observation kept; tap **Resume audio** and the gap is filled with silence so the timing stays right.
 
@@ -41,6 +42,9 @@ Keep the app on screen while logging. The screen stays awake, but switching to a
 |---|---|
 | `session.amb` | The session in the Windows app's own backup format (gzip JSON) as a live session. Observation times are seconds from Start plus the matching wall-clock times. |
 | `audio.wav` | 16-bit mono, 16 kHz. Its start time is `session.audio_start` in `session.amb`. About 2 MB per minute. |
+| `photos/*.jpg` | Photos, at most 1600 pixels on the long side. `session.amb` lists which belong to which observation and which show the measurement position. |
+
+`session.amb` also carries the site and job details (`session.site_details`) and the planned length. The Windows app imports them with the session: the details fill the field sheet, the meter is linked to the matching instrument in its register, and the photos can be viewed from the session and observation right-click menus.
 
 ## Files
 

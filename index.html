@@ -66,6 +66,23 @@
   ul.obs .what { flex: 1; }
   ul.obs .cat { color: var(--muted); font-size: 15px; }
   ul.obs .excl { color: var(--danger); font-weight: 700; font-size: 14px; }
+  ul.obs button.play { min-width: 56px; min-height: 48px; font-size: 18px; flex: 0 0 auto; }
+  ul.obs .cam { color: var(--muted); font-size: 14px; }
+  .details-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0 2px; }
+  dialog.details { width: min(760px, 96vw); }
+  fieldset { border: 1px solid var(--line); border-radius: 12px; margin: 0 0 12px; padding: 10px 12px 12px; }
+  legend { color: var(--muted); font-weight: 600; padding: 0 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 12px; }
+  .grid label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 15px; }
+  .grid label.wide { grid-column: 1 / -1; }
+  select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 12px; padding: 11px; }
+  .photos { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .photos img { width: 88px; height: 88px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line);
+    cursor: pointer; }
+  #remaining.over { color: var(--danger); font-weight: 800; }
+  body.flash { animation: flash 0.6s ease-in-out 6; }
+  @keyframes flash { 50% { background: var(--danger); } }
   .muted { color: var(--muted); }
   .note { font-size: 15px; color: var(--muted); }
   .banner { border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; font-weight: 600; }
@@ -101,6 +118,14 @@
           <label for="session-name" class="muted">Name (optional), e.g. the site or position</label>
           <input type="text" id="session-name" autocomplete="off" placeholder="e.g. North boundary, position 1">
         </div>
+        <div style="flex: 0 1 220px">
+          <label for="planned-min" class="muted">Planned length, minutes (optional)</label>
+          <input type="text" id="planned-min" inputmode="decimal" autocomplete="off" placeholder="e.g. 15">
+        </div>
+      </div>
+      <div class="details-line">
+        <button id="btn-details-start">Site and job details&hellip;</button>
+        <span id="details-summary" class="note"></span>
       </div>
       <label class="check"><input type="checkbox" id="audio-enabled" checked> Record audio as a timing reference</label>
       <p class="note">Press Start at the same moment you start the sound level meter. The audio is not a
@@ -120,6 +145,7 @@
     <div class="panel">
       <div class="timer" id="timer">0:00</div>
       <div class="state live" id="live-state">Logging</div>
+      <div class="state hidden" id="remaining"></div>
       <div class="audio-line" id="audio-line">
         <span id="audio-text">Audio off</span>
         <button class="small primary hidden" id="btn-resume-audio">Resume audio</button>
@@ -144,6 +170,7 @@
     </div>
     <div class="row" style="margin-top:12px">
       <button id="btn-pause">Pause logging</button>
+      <button id="btn-details-live">Site details&hellip;</button>
       <button class="danger" id="btn-stop">Stop session</button>
     </div>
 
@@ -154,17 +181,114 @@
     </div>
   </section>
 
+  <!-- ── Reviewing a finished session ── -->
+  <section id="view-review" class="hidden">
+    <div class="bar">
+      <button id="review-back">&#8592; Sessions</button>
+      <span class="spacer"></span>
+      <button id="btn-details-review">Site details&hellip;</button>
+      <button class="primary" id="review-export">Export</button>
+    </div>
+    <div class="panel">
+      <h2 id="review-title" style="color:var(--ink);font-size:20px"></h2>
+      <p id="review-summary" class="note" style="margin:0"></p>
+    </div>
+    <div class="panel">
+      <h2>Observations <span class="note">(tap one to edit; &#9654; to listen)</span></h2>
+      <ul class="obs" id="review-list"></ul>
+      <p id="review-none" class="note">Nothing was logged in this session.</p>
+    </div>
+  </section>
+
   <!-- ── Edit an observation ── -->
   <dialog id="edit-dialog">
-    <h2 id="edit-title">Observation</h2>
+    <div class="bar" style="margin-bottom:6px">
+      <h2 id="edit-title" style="margin:0">Observation</h2>
+      <span class="spacer"></span>
+      <button class="small" id="edit-play">&#9654; Listen</button>
+    </div>
     <label for="edit-note" class="muted">Description</label>
     <textarea id="edit-note"></textarea>
     <div class="chips" id="edit-chips" style="margin:10px 0"></div>
     <label class="check"><input type="checkbox" id="edit-exclude"> Exclude from assessment</label>
+    <div class="photos" id="edit-photos"></div>
+    <button class="small" id="edit-add-photo">&#128247; Add photo</button>
     <div class="row" style="margin-top:10px">
       <button class="danger" id="edit-delete">Delete</button>
       <button id="edit-cancel">Cancel</button>
       <button class="primary" id="edit-save">Save</button>
+    </div>
+  </dialog>
+
+  <!-- ── Site and job details (fill the field sheet on the laptop) ── -->
+  <dialog id="details-dialog" class="details">
+    <h2 style="color:var(--ink)">Site and job details</h2>
+    <p class="note" style="margin-top:0">These fill the Environmental Noise Measurement sheet after import.
+      All optional; change them any time.</p>
+    <fieldset><legend>Job</legend>
+      <div class="grid">
+        <label>Job number<input type="text" data-key="job_number" autocomplete="off"></label>
+        <label>Folder<input type="text" data-key="folder" autocomplete="off"></label>
+        <label>Client<input type="text" data-key="client" autocomplete="off"></label>
+        <label>Operator<input type="text" data-key="operator" autocomplete="off"></label>
+        <label class="wide">Measurement location<input type="text" data-key="location" autocomplete="off"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Sound level meter and calibration</legend>
+      <div class="grid">
+        <label>Meter<select data-key="meter">
+          <option value="">Not set</option><option>SVAN 958A</option><option>SVAN 971</option>
+          <option>NTi Audio XL3</option><option>NTi Audio XL2</option><option>Other</option></select></label>
+        <label>Serial number<input type="text" data-key="meter_serial" autocomplete="off"></label>
+        <label class="wide">Calibrator<input type="text" data-key="calibrator" autocomplete="off"></label>
+        <label>Pre-calibration<input type="text" data-key="pre_cal" placeholder="e.g. 94.0 dB" autocomplete="off"></label>
+        <label>Post-calibration<input type="text" data-key="post_cal" placeholder="e.g. 94.1 dB" autocomplete="off"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Weather</legend>
+      <div class="grid">
+        <label>Temperature (&deg;C)<input type="text" data-key="temp" inputmode="decimal" autocomplete="off"></label>
+        <label>Clouds (% or octas)<input type="text" data-key="clouds" autocomplete="off"></label>
+        <label>Humidity (%)<input type="text" data-key="humidity" inputmode="decimal" autocomplete="off"></label>
+        <label>Wind average (m/s)<input type="text" data-key="wind_avg" inputmode="decimal" autocomplete="off"></label>
+        <label>Wind maximum (m/s)<input type="text" data-key="wind_max" inputmode="decimal" autocomplete="off"></label>
+        <label>Wind direction<input type="text" data-key="wind_dir" placeholder="e.g. NW" autocomplete="off"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>Noise environment</legend>
+      <textarea data-key="noise_environment" placeholder="Dominant noise sources, character (intermittent or continuous, tonal, impulsive), area"></textarea>
+    </fieldset>
+    <fieldset id="position-photos-set"><legend>Photos of the measurement position</legend>
+      <div class="photos" id="position-photos"></div>
+      <button class="small" id="details-add-photo">&#128247; Add photo</button>
+      <p class="note" id="position-photos-note">Save the session first by pressing Start; photos can be added once it exists.</p>
+    </fieldset>
+    <div class="row" style="margin-top:10px">
+      <button id="details-cancel">Cancel</button>
+      <button class="primary" id="details-save">Save</button>
+    </div>
+  </dialog>
+
+  <input type="file" id="photo-input" accept="image/*" capture="environment" class="hidden">
+
+  <!-- ── A photo, full size ── -->
+  <dialog id="photo-dialog">
+    <img id="photo-full" alt="Photo" style="max-width:100%;max-height:70vh;display:block;margin:0 auto 10px">
+    <div class="row">
+      <button class="danger" id="photo-delete">Delete photo</button>
+      <button class="primary" id="photo-close">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ── Export: choose how to send the file ── -->
+  <dialog id="export-dialog">
+    <h2>File ready</h2>
+    <p id="export-name" style="word-break: break-all"></p>
+    <p class="note">Share sends it straight to email, a cloud drive or Nearby Share. Save puts it in Downloads.</p>
+    <div class="row">
+      <button class="primary" id="export-share">Share</button>
+      <button id="export-save">Save to Downloads</button>
+      <button id="export-cancel">Cancel</button>
     </div>
   </dialog>
 
@@ -180,11 +304,27 @@
       marks something that lasts. <b>Pause</b> marks the paused time as excluded.</p>
     <p><b>Exclude</b> anything that should not count in the assessment, such as you talking or wind on the
       microphone. It is still kept and shown, just left out of the assessed figures.</p>
+    <p><b>Site and job details</b> (job, client, location, operator, meter, calibration, weather, noise
+      environment) fill the Environmental Noise Measurement sheet on the laptop. Fill them in before Start or any
+      time after; the job, client, operator, meter and calibrator are remembered for the next position.</p>
+    <p><b>Planned length:</b> enter the minutes before Start and the screen counts down. When the time is up the
+      tablet vibrates and the screen flashes, with no sound so the meter isn't affected. Stop the meter, then
+      Stop session.</p>
+    <p><b>Photos:</b> add them to any observation (tap it, then <i>Add photo</i>) or of the measurement position
+      (<i>Site details</i>). They are shrunk to save space and travel with the exported session.</p>
+    <p><b>Listen back</b> with &#9654; on any entry: it plays the few seconds before a moment (you log a sound
+      after hearing it) or the start of a range. While logging, use headphones: through the speaker the playback
+      would be picked up by the meter. When you stop, the session opens for review so you can listen and fill in
+      notes before exporting; <i>Review</i> in Saved sessions opens it again later.</p>
     <p><b>Keep this screen open</b> while logging. The screen is kept awake, but switching to another app
       can stop the audio recording on some tablets.</p>
     <p><b>Afterwards</b>, tap <i>Export</i> on the session and move the .zip file to the laptop (USB, email,
       cloud drive). In the Acoustic Monitoring Software use <i>Import</i> and choose the .zip; the session and
       its audio appear ready to bind to the meter's file, exactly like a session logged on the laptop.</p>
+    <p><b>If export or the microphone fails</b> with a message such as <i>Permission denied</i>, try again first:
+      the browser sometimes refuses the first attempt. If it keeps failing, check this site's permissions in Chrome
+      (<i>&#8942;, Settings, Site settings</i>): the microphone must be allowed, and downloads must not be blocked.
+      Nothing is lost by retrying; sessions stay saved on the device until you delete them.</p>
     <div class="row"><button class="primary" id="help-close">Close</button></div>
   </dialog>
 

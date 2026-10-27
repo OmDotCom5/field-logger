@@ -60,18 +60,21 @@ function banner(text, kind = 'warn') {
 
 // ── Storage (IndexedDB) ─────────────────────────────────────────────────────
 //
-// sessions: {id, name, liveStartMs, stoppedMs, observations[], audio}
+// sessions: {id, name, liveStartMs, stoppedMs, observations[], audio, details,
+//            plannedSeconds, positionPhotos[]}
 // audio:    {key: [sessionId, index], data: ArrayBuffer of Int16 samples}
+// photos:   {key: [sessionId, photoId], data: JPEG Blob}
 
 let db;
 
 function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('field-logger', 1);
+    const req = indexedDB.open('field-logger', 2);
     req.onupgradeneeded = () => {
       const d = req.result;
-      d.createObjectStore('sessions', { keyPath: 'id' });
-      d.createObjectStore('audio');
+      if (!d.objectStoreNames.contains('sessions')) d.createObjectStore('sessions', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio');
+      if (!d.objectStoreNames.contains('photos')) d.createObjectStore('photos');
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -107,7 +110,13 @@ async function deleteSessionData(s) {
   await tx('sessions', 'readwrite', (st) => st.delete(s.id));
   await tx('audio', 'readwrite', (st) =>
     st.delete(IDBKeyRange.bound([s.id, 0], [s.id, Number.MAX_SAFE_INTEGER])));
+  await tx('photos', 'readwrite', (st) =>
+    st.delete(IDBKeyRange.bound([s.id, ''], [s.id, '￿'])));
 }
+
+const savePhoto = (sid, pid, blob) => tx('photos', 'readwrite', (st) => st.put(blob, [sid, pid]));
+const loadPhoto = (sid, pid) => tx('photos', 'readonly', (st) => st.get([sid, pid]));
+const removePhoto = (sid, pid) => tx('photos', 'readwrite', (st) => st.delete([sid, pid]));
 
 // ── Session state ───────────────────────────────────────────────────────────
 
@@ -132,15 +141,166 @@ function selectedCategories(container) {
 
 function addObservation({ elapsedStart, elapsedEnd = null, note, category, excluded }) {
   session.observations.push({
-    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+    id: newId(),
     elapsed_start: elapsedStart,
     elapsed_end: elapsedEnd,
     note: (note || '').trim() || PLACEHOLDER_NOTE,
     category,
     excluded: !!excluded,
     created_ms: Date.now(),
+    photos: [],
   });
   saveSession(session);
+  renderObservations();
+}
+
+function newId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// ── Site and job details ────────────────────────────────────────────────────
+//
+// The fields of the paper Environmental Noise Measurement sheet that only the
+// operator on site can fill in. They travel with the session and fill the
+// sheet the Windows app generates. Those that rarely change between
+// positions on a job are remembered for the next session.
+
+const DETAIL_KEYS = ['job_number', 'folder', 'client', 'operator', 'location', 'meter', 'meter_serial',
+                     'calibrator', 'pre_cal', 'post_cal', 'temp', 'clouds', 'humidity', 'wind_avg',
+                     'wind_max', 'wind_dir', 'noise_environment'];
+const REMEMBERED_KEYS = ['job_number', 'folder', 'client', 'operator', 'meter', 'meter_serial', 'calibrator'];
+
+let draftDetails = {};   // for the next session, before Start
+let detailsTarget = null;  // the session whose details are open, or null for the draft
+
+function loadRemembered() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('field-logger-details') || '{}');
+    for (const k of REMEMBERED_KEYS) if (saved[k]) draftDetails[k] = saved[k];
+  } catch (e) { /* storage unavailable: start blank */ }
+}
+
+function remember(details) {
+  try {
+    const keep = {};
+    for (const k of REMEMBERED_KEYS) if (details[k]) keep[k] = details[k];
+    localStorage.setItem('field-logger-details', JSON.stringify(keep));
+  } catch (e) { /* not remembered; harmless */ }
+}
+
+function detailsSummary(d) {
+  const filled = DETAIL_KEYS.filter((k) => d && d[k]).length;
+  if (!filled) return 'Not filled in yet';
+  const bits = [d.job_number && `job ${d.job_number}`, d.location, d.operator, d.meter].filter(Boolean);
+  return `${filled} of ${DETAIL_KEYS.length} filled${bits.length ? ': ' + bits.join(', ') : ''}`;
+}
+
+function openDetails(target) {
+  detailsTarget = target;
+  const d = target ? (target.details || {}) : draftDetails;
+  document.querySelectorAll('#details-dialog [data-key]').forEach((el) => { el.value = d[el.dataset.key] || ''; });
+  $('details-add-photo').classList.toggle('hidden', !target);
+  $('position-photos-note').classList.toggle('hidden', !!target);
+  renderPhotos($('position-photos'), target, target ? (target.positionPhotos || []) : []);
+  $('details-dialog').showModal();
+}
+
+async function saveDetails() {
+  const d = {};
+  document.querySelectorAll('#details-dialog [data-key]').forEach((el) => {
+    const v = el.value.trim();
+    if (v) d[el.dataset.key] = v;
+  });
+  if (detailsTarget) {
+    detailsTarget.details = d;
+    await saveSession(detailsTarget);
+  } else {
+    draftDetails = d;
+  }
+  remember(d);
+  $('details-dialog').close();
+  refreshDetailsSummary();
+}
+
+function refreshDetailsSummary() {
+  $('details-summary').textContent = detailsSummary(draftDetails);
+}
+
+// ── Photos ──────────────────────────────────────────────────────────────────
+//
+// Taken with the tablet's camera, shrunk to at most 1600 pixels on the long
+// side as JPEG (a few hundred KB) so a session full of them stays easy to
+// export and send.
+
+const PHOTO_MAX = 1600;
+let photoRequest = null;   // {session, list, after} for the next picture taken
+let photoShown = null;     // {session, list, id} in the full-size view
+const thumbUrls = [];
+
+async function shrinkPhoto(file) {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, PHOTO_MAX / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+}
+
+function takePhoto(s, list, after) {
+  photoRequest = { session: s, list, after };
+  $('photo-input').value = '';
+  $('photo-input').click();
+}
+
+async function onPhotoChosen() {
+  const file = $('photo-input').files[0];
+  const req = photoRequest;
+  photoRequest = null;
+  if (!file || !req) return;
+  try {
+    const blob = await shrinkPhoto(file);
+    const id = newId();
+    await savePhoto(req.session.id, id, blob);
+    req.list.push(id);
+    await saveSession(req.session);
+    req.after();
+  } catch (e) {
+    banner(`The photo could not be saved (${e.message || e}). Try again.`, 'err');
+  }
+}
+
+async function renderPhotos(container, s, ids) {
+  container.innerHTML = '';
+  if (!s) return;
+  for (const id of ids) {
+    const blob = await loadPhoto(s.id, id);
+    if (!blob) continue;
+    const url = URL.createObjectURL(blob);
+    thumbUrls.push(url);
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = 'Photo';
+    img.onclick = () => showPhoto(s, ids, id, url, () => renderPhotos(container, s, ids));
+    container.appendChild(img);
+  }
+}
+
+function showPhoto(s, list, id, url, after) {
+  photoShown = { session: s, list, id, after };
+  $('photo-full').src = url;
+  $('photo-dialog').showModal();
+}
+
+async function deleteShownPhoto() {
+  if (!photoShown || !confirm('Delete this photo?')) return;
+  const { session: s, list, id, after } = photoShown;
+  const i = list.indexOf(id);
+  if (i >= 0) list.splice(i, 1);
+  await removePhoto(s.id, id);
+  await saveSession(s);
+  $('photo-dialog').close();
+  after();
   renderObservations();
 }
 
@@ -232,6 +392,8 @@ function flushAudio() {
   for (const p of pending) { merged.set(p, o); o += p.length; }
   pending = []; pendingSamples = 0;
   const index = session.audio.chunks++;
+  // Where each chunk starts, so playback can load just the few it needs.
+  (session.audio.chunkStarts = session.audio.chunkStarts || []).push(session.audio.samples);
   session.audio.samples += merged.length;
   saveAudioChunk(session.id, index, merged.buffer);
   saveSession(session);
@@ -298,13 +460,64 @@ function tick() {
   if (pauseStart) { st.textContent = `Paused at ${fmtElapsed(pauseStart.elapsed)}`; st.className = 'state paused'; }
   else if (rangeStart) { st.textContent = `Range open since ${fmtElapsed(rangeStart.elapsed)}`; st.className = 'state live'; }
   else { st.textContent = 'Logging'; st.className = 'state live'; }
+  updateRemaining();
+}
+
+// ── Measurement timer ───────────────────────────────────────────────────────
+//
+// Counts down to the planned length and, when it is reached, vibrates and
+// flashes the screen. Deliberately silent: a beep would be measured by the
+// sound level meter. It never stops the session itself: the meter has to be
+// stopped first, and that is the operator's call.
+
+function updateRemaining() {
+  const el = $('remaining');
+  if (!session || !session.plannedSeconds) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const left = session.plannedSeconds - elapsedNow();
+  if (left > 0) {
+    el.textContent = `${fmtElapsed(left)} left of ${fmtElapsed(session.plannedSeconds)}`;
+    el.classList.remove('over');
+    return;
+  }
+  el.textContent = `Planned ${fmtElapsed(session.plannedSeconds)} reached ${fmtElapsed(-left)} ago: ` +
+                   'stop the meter, then Stop session';
+  el.classList.add('over');
+  if (!session.plannedAlerted) {
+    session.plannedAlerted = true;
+    saveSession(session);
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 900]);
+    document.body.classList.remove('flash');
+    void document.body.offsetWidth;   // restart the animation
+    document.body.classList.add('flash');
+    setTimeout(() => document.body.classList.remove('flash'), 4000);
+  }
+}
+
+function plannedFromInput() {
+  const minutes = parseFloat(($('planned-min').value || '').replace(',', '.'));
+  return minutes > 0 ? Math.round(minutes * 60) : null;
+}
+
+// The session whose observations are on screen: one under review after it
+// was stopped, otherwise the one being logged.
+let reviewing = null;
+const shownSession = () => reviewing || session;
+
+function hasAudio(s) {
+  return !!(s && s.audio && s.audio.startMs !== null && (s.audio.samples || (s === session && audioCtx)));
 }
 
 function renderObservations() {
-  const list = $('obs-list');
+  const s = shownSession();
+  if (!s) return;
+  const list = reviewing ? $('review-list') : $('obs-list');
+  const empty = reviewing ? $('review-none') : $('no-obs');
   list.innerHTML = '';
-  const obs = [...session.observations].sort((a, b) => b.elapsed_start - a.elapsed_start);
-  $('no-obs').classList.toggle('hidden', obs.length > 0);
+  // Newest first while logging; in time order when reviewing a whole session.
+  const obs = [...s.observations].sort((a, b) =>
+    reviewing ? a.elapsed_start - b.elapsed_start : b.elapsed_start - a.elapsed_start);
+  empty.classList.toggle('hidden', obs.length > 0);
   for (const o of obs) {
     const li = document.createElement('li');
     const when = o.elapsed_end !== null
@@ -314,20 +527,150 @@ function renderObservations() {
     li.querySelector('.when').textContent = when;
     li.querySelector('.txt').textContent = o.note;
     li.querySelector('.cat').textContent = o.category;
+    if (o.photos && o.photos.length) {
+      const cam = document.createElement('span');
+      cam.className = 'cam';
+      cam.textContent = `  \u{1F4F7} ${o.photos.length}`;
+      li.querySelector('.cat').appendChild(cam);
+    }
     if (o.excluded) {
       const ex = document.createElement('span');
       ex.className = 'excl';
       ex.textContent = '  EXCLUDED';
       li.querySelector('.cat').appendChild(ex);
     }
+    if (hasAudio(s)) {
+      const play = document.createElement('button');
+      play.className = 'small play';
+      play.textContent = '▶';
+      play.setAttribute('aria-label', 'Listen to this moment');
+      play.onclick = (ev) => { ev.stopPropagation(); playObservation(s, o, play); };
+      li.appendChild(play);
+    }
     li.onclick = () => openEditor(o);
     list.appendChild(li);
   }
 }
 
-function showView(live) {
-  $('view-start').classList.toggle('hidden', live);
-  $('view-live').classList.toggle('hidden', !live);
+function showView(name) {
+  $('view-start').classList.toggle('hidden', name !== 'start');
+  $('view-live').classList.toggle('hidden', name !== 'live');
+  $('view-review').classList.toggle('hidden', name !== 'review');
+}
+
+// ── Playback ────────────────────────────────────────────────────────────────
+//
+// Plays the recording around an observation so the operator can check what
+// it was while it is fresh. Mostly before the logged time for a moment,
+// because a sound is logged after it is heard.
+
+const PLAY_BEFORE = 4, PLAY_AFTER = 1.5, RANGE_MAX = 15;
+let player = { ctx: null, src: null, btn: null };
+let playbackConfirmed = new Set();   // live sessions where headphones were confirmed
+
+function stopPlayback() {
+  if (player.src) { try { player.src.stop(); } catch (e) { /* already ended */ } }
+  if (player.btn) player.btn.textContent = '▶';
+  player.src = player.btn = null;
+}
+
+async function chunkStarts(s) {
+  // Sessions recorded before chunk positions were stored: work them out once.
+  if (s.audio.chunkStarts && s.audio.chunkStarts.length === s.audio.chunks) return s.audio.chunkStarts;
+  const chunks = await loadAudioChunks(s.id, s.audio.chunks);
+  const starts = [];
+  let n = 0;
+  for (const c of chunks) { starts.push(n); n += c ? c.byteLength / 2 : 0; }
+  s.audio.chunkStarts = starts;
+  await saveSession(s);
+  return starts;
+}
+
+/** Samples from fromSec to toSec of the recording, as floats. */
+async function readAudio(s, fromSec, toSec) {
+  const rate = s.audio.sampleRate;
+  const a = Math.max(0, Math.floor(fromSec * rate));
+  const b = Math.min(s.audio.samples, Math.ceil(toSec * rate));
+  if (b <= a) return null;
+  const starts = await chunkStarts(s);
+  const wanted = [];
+  for (let i = 0; i < starts.length; i++) {
+    const next = i + 1 < starts.length ? starts[i + 1] : s.audio.samples;
+    if (next > a && starts[i] < b) wanted.push(i);
+  }
+  const bufs = await tx('audio', 'readonly', (st) => {
+    const out = {};
+    for (const i of wanted) { const r = st.get([s.id, i]); r.onsuccess = () => { out[i] = r.result; }; }
+    return out;
+  });
+  const result = new Float32Array(b - a);
+  for (const i of wanted) {
+    if (!bufs[i]) continue;
+    const pcm = new Int16Array(bufs[i]);
+    for (let k = 0; k < pcm.length; k++) {
+      const pos = starts[i] + k - a;
+      if (pos >= 0 && pos < result.length) result[pos] = pcm[k] / 32768;
+    }
+  }
+  return result;
+}
+
+async function playObservation(s, o, btn) {
+  if (player.btn === btn) { stopPlayback(); return; }   // second tap stops it
+  stopPlayback();
+  const live = s === session && !s.stoppedMs;
+  if (live && !playbackConfirmed.has(s.id)) {
+    if (!confirm('Use headphones to listen while logging.\n\nThrough the tablet speaker, the playback ' +
+                 'would be picked up by the sound level meter and by this recording.\n\n' +
+                 'OK: headphones are connected, play it.\nCancel: listen after stopping the session.')) return;
+    playbackConfirmed.add(s.id);
+  }
+  if (live) flushAudio();   // include the last couple of seconds
+  const at = (s.liveStartMs + o.elapsed_start * 1000 - s.audio.startMs) / 1000;
+  const from = at - (o.elapsed_end !== null ? 1 : PLAY_BEFORE);
+  const to = o.elapsed_end !== null
+    ? Math.min(at + (o.elapsed_end - o.elapsed_start) + 1, at + RANGE_MAX)
+    : at + PLAY_AFTER;
+  const samples = await readAudio(s, from, to);
+  if (!samples) {
+    banner('There is no recording at this time (audio was off or had not started yet).', 'warn');
+    return;
+  }
+  player.ctx = player.ctx || new AudioContext();
+  await player.ctx.resume();
+  const buffer = player.ctx.createBuffer(1, samples.length, s.audio.sampleRate);
+  buffer.copyToChannel(samples, 0);
+  const src = player.ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(player.ctx.destination);
+  src.onended = () => { if (player.src === src) stopPlayback(); };
+  player.src = src;
+  player.btn = btn;
+  btn.textContent = '■';
+  src.start();
+}
+
+// ── Reviewing a finished session ────────────────────────────────────────────
+
+async function openReview(s) {
+  stopPlayback();
+  reviewing = s;
+  $('review-title').textContent = sessionLabel(s);
+  const duration = s.stoppedMs ? fmtElapsed((s.stoppedMs - s.liveStartMs) / 1000) : '';
+  $('review-summary').textContent =
+    `${duration} · ${s.observations.length} observation(s) · ` +
+    (hasAudio(s) ? 'tap ▶ to listen' : 'no audio recorded');
+  renderObservations();
+  showView('review');
+  banner('');
+  window.scrollTo(0, 0);
+}
+
+async function closeReview() {
+  stopPlayback();
+  reviewing = null;
+  showView('start');
+  await renderSessions();
 }
 
 async function startSession() {
@@ -338,6 +681,10 @@ async function startSession() {
     liveStartMs: Date.now(),
     stoppedMs: null,
     observations: [],
+    details: { ...draftDetails },
+    plannedSeconds: plannedFromInput(),
+    plannedAlerted: false,
+    positionPhotos: [],
     audio: null,
     appVersion: APP_VERSION,
   };
@@ -347,7 +694,7 @@ async function startSession() {
   $('btn-range').textContent = 'START RANGE';
   $('btn-pause').textContent = 'Pause logging';
   renderObservations();
-  showView(true);
+  showView('live');
   timerHandle = setInterval(tick, 250);
   tick();
   keepAwake();
@@ -421,46 +768,64 @@ async function stopSession() {
                      note: 'Measurement paused', category: 'Other', excluded: true });
   }
   rangeStart = pauseStart = null;
+  stopPlayback();
   await stopAudio();
   session.stoppedMs = Date.now();
   await saveSession(session);
   clearInterval(timerHandle);
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  const finished = session;
   session = null;
   $('session-name').value = '';
-  showView(false);
-  await renderSessions();
-  banner('Session saved. Use Export to get the file for the laptop.', 'warn');
+  // The next position on the same job starts with the remembered details.
+  draftDetails = {};
+  loadRemembered();
+  refreshDetailsSummary();
+  // Straight to review: the natural time to listen back and fill in notes.
+  await openReview(finished);
+  banner('Session saved. Listen back and fill in any notes now, then Export it for the laptop.', 'warn');
 }
 
 // ── Editing an observation ──────────────────────────────────────────────────
 
-let editing = null;
+let editing = null, editingSession = null;
 
 function openEditor(o) {
   editing = o;
+  editingSession = shownSession();
+  $('edit-play').classList.toggle('hidden', !hasAudio(editingSession));
+  $('edit-play').textContent = '▶ Listen';
   const when = o.elapsed_end !== null
     ? `${fmtElapsed(o.elapsed_start)} to ${fmtElapsed(o.elapsed_end)}` : `at ${fmtElapsed(o.elapsed_start)}`;
   $('edit-title').textContent = `Observation ${when}`;
   $('edit-note').value = o.note === PLACEHOLDER_NOTE ? '' : o.note;
   setChips($('edit-chips'), o.category);
   $('edit-exclude').checked = o.excluded;
+  o.photos = o.photos || [];
+  renderPhotos($('edit-photos'), editingSession, o.photos);
   $('edit-dialog').showModal();
+}
+
+function addEditPhoto() {
+  const o = editing, s = editingSession;
+  takePhoto(s, o.photos, () => { renderPhotos($('edit-photos'), s, o.photos); renderObservations(); });
 }
 
 function saveEdit() {
   editing.note = $('edit-note').value.trim() || PLACEHOLDER_NOTE;
   editing.category = selectedCategories($('edit-chips'));
   editing.excluded = $('edit-exclude').checked;
-  saveSession(session);
+  saveSession(editingSession);
+  stopPlayback();
   renderObservations();
   $('edit-dialog').close();
 }
 
 function deleteEdit() {
   if (!confirm('Delete this observation?')) return;
-  session.observations = session.observations.filter((o) => o !== editing);
-  saveSession(session);
+  editingSession.observations = editingSession.observations.filter((o) => o !== editing);
+  saveSession(editingSession);
+  stopPlayback();
   renderObservations();
   $('edit-dialog').close();
 }
@@ -486,6 +851,13 @@ async function renderSessions() {
     tr.querySelector('.lbl').textContent = sessionLabel(s);
     tr.querySelector('.note').textContent =
       `${duration} · ${s.observations.length} observation(s) · ${audio}`;
+    const rev = document.createElement('button');
+    rev.className = 'small';
+    rev.textContent = 'Review';
+    rev.onclick = () => openReview(s);
+    rev.disabled = !s.stoppedMs;
+    tr.querySelector('.lbl').style.cursor = s.stoppedMs ? 'pointer' : '';
+    tr.querySelector('.lbl').onclick = () => { if (s.stoppedMs) openReview(s); };
     const exp = document.createElement('button');
     exp.className = 'primary small';
     exp.textContent = 'Export';
@@ -498,7 +870,7 @@ async function renderSessions() {
       await deleteSessionData(s);
       renderSessions();
     };
-    tr.querySelector('.actions').append(exp, ' ', del);
+    tr.querySelector('.actions').append(rev, ' ', exp, ' ', del);
     rows.appendChild(tr);
   }
 }
@@ -516,6 +888,11 @@ function backupPayload(s) {
       live_start: localIso(s.liveStartMs),
       display_name: s.name,
       audio_start: s.audio && s.audio.samples && s.audio.startMs !== null ? localIso(s.audio.startMs) : null,
+      // Extra keys the Windows app's plain backup restore ignores; its Field
+      // Logger import reads them.
+      site_details: s.details || {},
+      planned_duration_s: s.plannedSeconds || null,
+      position_photos: (s.positionPhotos || []).map((id) => `photos/${id}.jpg`),
     },
     records: [],
     observations: [...s.observations]
@@ -530,6 +907,7 @@ function backupPayload(s) {
         note: o.note,
         excluded: o.excluded ? 1 : 0,
         created_at: localIso(o.created_ms),
+        photos: (o.photos || []).map((id) => `photos/${id}.jpg`),
       })),
   };
 }
@@ -605,34 +983,62 @@ async function buildExport(s) {
     const samples = chunks.reduce((n, c) => n + c.length / 2, 0);
     files.push({ name: 'audio.wav', parts: [wavHeader(samples, s.audio.sampleRate), ...chunks] });
   }
+  const photoIds = [...(s.positionPhotos || []), ...s.observations.flatMap((o) => o.photos || [])];
+  for (const id of photoIds) {
+    const blob = await loadPhoto(s.id, id);
+    if (blob) files.push({ name: `photos/${id}.jpg`, parts: [new Uint8Array(await blob.arrayBuffer())] });
+  }
   const safe = (s.name || 'session').replace(/[^A-Za-z0-9 _-]/g, '_').trim() || 'session';
   const d = new Date(s.liveStartMs);
   const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
   return { blob: buildZip(files, s.liveStartMs), filename: `${safe}_${stamp}_field_log.zip` };
 }
 
+// The file is built first, then the operator picks Share or Save with a fresh
+// tap. The browser only opens the share sheet straight after a tap, so asking
+// first with a pop-up, or building a long recording in between, used to make
+// the first attempt fail with "Permission denied".
+let exportReady = null;
+
 async function exportSession(s) {
+  banner('Preparing the file…', 'warn');
   try {
     const { blob, filename } = await buildExport(s);
-    const file = new File([blob], filename, { type: 'application/zip' });
-    // Offer the device's share sheet where available (email, Drive, Nearby
-    // Share); otherwise save it to Downloads.
-    if (navigator.canShare && navigator.canShare({ files: [file] }) &&
-        confirm('Share the file (email, cloud drive, Nearby Share)?\n\nCancel saves it to Downloads instead.')) {
-      await navigator.share({ files: [file], title: filename });
-    } else {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-    }
-    banner(`Exported ${filename}. Import it in the Acoustic Monitoring Software on the laptop.`, 'warn');
+    exportReady = { file: new File([blob], filename, { type: 'application/zip' }), blob, filename };
   } catch (e) {
-    if (e && e.name === 'AbortError') return;   // share sheet cancelled
-    banner(`Export failed: ${e.message || e}`, 'err');
+    banner(`Export failed while preparing the file: ${e.message || e}. Try Export again.`, 'err');
+    return;
   }
+  banner('');
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [exportReady.file] }));
+  $('export-name').textContent =
+    `${exportReady.filename} (${(exportReady.blob.size / 1048576).toFixed(1)} MB)`;
+  $('export-share').classList.toggle('hidden', !canShare);
+  $('export-dialog').showModal();
+}
+
+async function shareExport() {
+  $('export-dialog').close();
+  try {
+    await navigator.share({ files: [exportReady.file], title: exportReady.filename });
+    banner(`Shared ${exportReady.filename}. Import it in the Acoustic Monitoring Software on the laptop.`, 'warn');
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;   // share sheet closed without choosing
+    banner(`Sharing failed (${e.message || e}). Tap Export again, or use Save to Downloads. If it keeps ` +
+           'failing, check the site’s permissions in Chrome: ⋮, Settings, Site settings.', 'err');
+  }
+}
+
+function saveExport() {
+  $('export-dialog').close();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(exportReady.blob);
+  a.download = exportReady.filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  banner(`Saved ${exportReady.filename} to Downloads. Import it in the Acoustic Monitoring Software on the laptop.`,
+         'warn');
 }
 
 // ── Start-up ────────────────────────────────────────────────────────────────
@@ -661,7 +1067,7 @@ async function resumeUnfinished() {
   session = open;
   rangeStart = pauseStart = null;
   renderObservations();
-  showView(true);
+  showView('live');
   timerHandle = setInterval(tick, 250);
   tick();
   keepAwake();
@@ -730,6 +1136,29 @@ async function main() {
   $('edit-cancel').onclick = () => $('edit-dialog').close();
   $('edit-delete').onclick = deleteEdit;
   $('btn-resume-audio').onclick = resumeAudio;
+  $('btn-details-start').onclick = () => openDetails(null);
+  $('btn-details-live').onclick = () => openDetails(session);
+  $('btn-details-review').onclick = () => openDetails(reviewing);
+  $('details-save').onclick = saveDetails;
+  $('details-cancel').onclick = () => $('details-dialog').close();
+  $('details-add-photo').onclick = () => {
+    const s = detailsTarget;
+    s.positionPhotos = s.positionPhotos || [];
+    takePhoto(s, s.positionPhotos, () => renderPhotos($('position-photos'), s, s.positionPhotos));
+  };
+  $('edit-add-photo').onclick = addEditPhoto;
+  $('photo-input').addEventListener('change', onPhotoChosen);
+  $('photo-delete').onclick = deleteShownPhoto;
+  $('photo-close').onclick = () => $('photo-dialog').close();
+  loadRemembered();
+  refreshDetailsSummary();
+  $('edit-play').onclick = () => playObservation(editingSession, editing, $('edit-play'));
+  $('review-back').onclick = closeReview;
+  $('review-export').onclick = () => exportSession(reviewing);
+  $('edit-dialog').addEventListener('close', stopPlayback);
+  $('export-share').onclick = shareExport;
+  $('export-save').onclick = saveExport;
+  $('export-cancel').onclick = () => $('export-dialog').close();
   $('btn-help').onclick = () => $('help-dialog').showModal();
   $('help-close').onclick = () => $('help-dialog').close();
   window.addEventListener('online', updateOfflineState);
@@ -759,6 +1188,7 @@ async function main() {
 }
 
 // Exposed for automated checks; not used by the page itself.
-window.fieldLogger = { backupPayload, buildExport, localIso, resumeUnfinished, loadSessions };
+window.fieldLogger = { backupPayload, buildExport, localIso, resumeUnfinished, loadSessions, readAudio,
+                        savePhoto, saveSession: (s) => saveSession(s) };
 
 main();
