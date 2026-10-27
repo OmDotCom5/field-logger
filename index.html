@@ -96,7 +96,22 @@
     width: min(560px, 92vw); padding: 18px; }
   dialog::backdrop { background: rgba(0,0,0,.45); }
   .help p { margin: 6px 0 10px; }
+  dialog.help { width: min(640px, 94vw); }
+  .help details { border: 1px solid var(--line); border-radius: 12px; margin: 0 0 8px; background: var(--bg); }
+  .help summary { cursor: pointer; padding: 14px 36px 14px 16px; font-weight: 700; list-style: none; position: relative;
+    min-height: 52px; }
+  .help summary::-webkit-details-marker { display: none; }
+  .help summary::after { content: '\25B8'; position: absolute; right: 16px; color: var(--muted);
+    transition: transform .15s; }
+  .help details[open] summary::after { transform: rotate(90deg); }
+  .help details ul { margin: 0; padding: 0 18px 14px 34px; }
+  .help details li { margin: 6px 0; }
   @media (max-width: 640px) { .timer { font-size: 48px; } button.big { min-height: 80px; font-size: 19px; } }
+  /* On a phone, each saved session's buttons go under its name. */
+  @media (max-width: 520px) {
+    table.sessions tr, table.sessions td { display: block; }
+    table.sessions td.actions { text-align: left; border-top: none; padding-top: 0; }
+  }
 </style>
 </head>
 <body>
@@ -114,12 +129,12 @@
     <div class="panel">
       <h2>New session</h2>
       <div class="row">
-        <div>
-          <label for="session-name" class="muted">Name (optional), e.g. the site or position</label>
-          <input type="text" id="session-name" autocomplete="off" placeholder="e.g. North boundary, position 1">
+        <div style="flex: 3 1 260px">
+          <label for="session-name" class="muted">Name (optional)</label>
+          <input type="text" id="session-name" autocomplete="off" placeholder="Site or position, e.g. North boundary 1">
         </div>
-        <div style="flex: 0 1 220px">
-          <label for="planned-min" class="muted">Planned length, minutes (optional)</label>
+        <div style="flex: 1 1 180px">
+          <label for="planned-min" class="muted">Planned minutes (optional)</label>
           <input type="text" id="planned-min" inputmode="decimal" autocomplete="off" placeholder="e.g. 15">
         </div>
       </div>
@@ -192,6 +207,9 @@
     <div class="panel">
       <h2 id="review-title" style="color:var(--ink);font-size:20px"></h2>
       <p id="review-summary" class="note" style="margin:0"></p>
+      <p class="note" style="margin:8px 0 0">The Environmental Noise Measurement sheet is produced in the Acoustic
+        Monitoring Software once this session is imported and the meter's file is bound to it: the results it
+        needs come from the meter. Your site details and observations fill the rest of it.</p>
     </div>
     <div class="panel">
       <h2>Observations <span class="note">(tap one to edit; &#9654; to listen)</span></h2>
@@ -294,38 +312,111 @@
 
   <!-- ── Help ── -->
   <dialog id="help-dialog" class="help">
-    <h2>Using the Field Logger</h2>
-    <p><b>Works offline.</b> Once installed (open it once with internet, then use the browser's
-      <i>Add to Home screen</i> or <i>Install app</i>), it needs no connection on site. Everything stays on this device.
-      Check the top of the screen says <b>Ready offline &#10003;</b> before you go; if it doesn't, open the app once
-      more with a connection.</p>
-    <p><b>Start</b> at the same moment you start the sound level meter. <b>Log moment</b> stamps the time
-      the instant you tap it; type a description before or after. <b>Start range</b> / <b>End range</b>
-      marks something that lasts. <b>Pause</b> marks the paused time as excluded.</p>
-    <p><b>Exclude</b> anything that should not count in the assessment, such as you talking or wind on the
-      microphone. It is still kept and shown, just left out of the assessed figures.</p>
-    <p><b>Site and job details</b> (job, client, location, operator, meter, calibration, weather, noise
-      environment) fill the Environmental Noise Measurement sheet on the laptop. Fill them in before Start or any
-      time after; the job, client, operator, meter and calibrator are remembered for the next position.</p>
-    <p><b>Planned length:</b> enter the minutes before Start and the screen counts down. When the time is up the
-      tablet vibrates and the screen flashes, with no sound so the meter isn't affected. Stop the meter, then
-      Stop session.</p>
-    <p><b>Photos:</b> add them to any observation (tap it, then <i>Add photo</i>) or of the measurement position
-      (<i>Site details</i>). They are shrunk to save space and travel with the exported session.</p>
-    <p><b>Listen back</b> with &#9654; on any entry: it plays the few seconds before a moment (you log a sound
-      after hearing it) or the start of a range. While logging, use headphones: through the speaker the playback
-      would be picked up by the meter. When you stop, the session opens for review so you can listen and fill in
-      notes before exporting; <i>Review</i> in Saved sessions opens it again later.</p>
-    <p><b>Keep this screen open</b> while logging. The screen is kept awake, but switching to another app
-      can stop the audio recording on some tablets.</p>
-    <p><b>Afterwards</b>, tap <i>Export</i> on the session and move the .zip file to the laptop (USB, email,
-      cloud drive). In the Acoustic Monitoring Software use <i>Import</i> and choose the .zip; the session and
-      its audio appear ready to bind to the meter's file, exactly like a session logged on the laptop.</p>
-    <p><b>If export or the microphone fails</b> with a message such as <i>Permission denied</i>, try again first:
-      the browser sometimes refuses the first attempt. If it keeps failing, check this site's permissions in Chrome
-      (<i>&#8942;, Settings, Site settings</i>): the microphone must be allowed, and downloads must not be blocked.
-      Nothing is lost by retrying; sessions stay saved on the device until you delete them.</p>
-    <div class="row"><button class="primary" id="help-close">Close</button></div>
+    <h2 style="color:var(--ink)">Help</h2>
+    <p class="note" style="margin-top:0">Tap a topic to open it.</p>
+
+    <details>
+      <summary>Getting started and working offline</summary>
+      <ul>
+        <li>Open the app once with a connection, then use your browser's menu: <i>Add to Home screen</i> or <i>Install app</i>.</li>
+        <li>Open it from the home screen icon from then on. It works with no connection.</li>
+        <li>Before going to site, check the top of the screen says <b>Ready offline &#10003;</b>. If not, open the app once more with a connection.</li>
+        <li>Everything stays on this device. Nothing is sent anywhere.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Logging a session</summary>
+      <ul>
+        <li>Press <b>START LOGGING</b> at the same moment you start the sound level meter.</li>
+        <li><b>LOG MOMENT</b> records the time the instant you tap it. Type a description before or after.</li>
+        <li><b>START RANGE</b> then <b>END RANGE</b> marks something that lasts, like a truck idling.</li>
+        <li><b>Pause logging</b> marks the paused time as excluded.</li>
+        <li>Press <b>Stop session</b> after you stop the meter. A stopped session can't be continued.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Categories, descriptions and excluding</summary>
+      <ul>
+        <li>Tap one or more categories before logging. None tapped means <i>General</i>.</li>
+        <li>Descriptions are optional at the time: capturing <i>when</i> matters most. Fill them in later.</li>
+        <li>Tick <b>Exclude from assessment</b> for anything that shouldn't count, such as you talking or wind on the microphone. It is kept and shown, but left out of the assessed figures.</li>
+        <li>Tap any logged entry to change its description, categories or exclusion.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Site and job details</summary>
+      <ul>
+        <li>Job, client, location, operator, meter, calibration, weather and noise environment.</li>
+        <li>They fill the Environmental Noise Measurement sheet on the laptop.</li>
+        <li>Fill them in before Start or any time after. All are optional.</li>
+        <li>Job, client, operator, meter and calibrator are remembered for the next position.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Planned length (timer)</summary>
+      <ul>
+        <li>Enter the minutes before Start. The screen counts down.</li>
+        <li>When the time is up the tablet vibrates and the screen flashes. It makes no sound, so the meter isn't affected.</li>
+        <li>It doesn't stop anything itself: stop the meter, then press Stop session.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Microphone and audio recording</summary>
+      <ul>
+        <li><b>What it's for:</b> listening back to check what you heard, and lining observations up with the sounds on the laptop.</li>
+        <li><b>It is not a measurement.</b> The tablet's microphone isn't calibrated; only the meter's data counts.</li>
+        <li><b>Untick it</b> if you don't want a recording, for privacy or to save battery and storage. Logging works the same.</li>
+        <li>Allow the microphone when asked. The bar under the timer moves when sound is picked up.</li>
+        <li>Keep this screen open while logging. Switching apps can stop the recording on some tablets.</li>
+        <li>If the app closed by accident, reopen it: the session carries on. Tap <b>Resume audio</b>; the gap is filled with silence so the timing stays right.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Listening back and reviewing</summary>
+      <ul>
+        <li>Tap <b>&#9654;</b> on an entry to hear the few seconds before it (you log a sound after hearing it), or the start of a range. Tap again to stop.</li>
+        <li><b>While logging, use headphones.</b> Through the speaker, the meter would hear the playback.</li>
+        <li>When you stop, the session opens for review: listen back and fill in notes before exporting.</li>
+        <li><b>Review</b> in Saved sessions opens it again later.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Photos</summary>
+      <ul>
+        <li>On an observation: tap it, then <b>Add photo</b>.</li>
+        <li>Of the measurement position: <b>Site details</b>, then <b>Add photo</b> (once the session has started).</li>
+        <li>Tap a photo to see it full size or delete it.</li>
+        <li>Photos are shrunk to save space and travel with the exported session.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>Exporting to the laptop and the field sheet</summary>
+      <ul>
+        <li>Tap <b>Export</b> on the session. On a tablet, <b>Share</b> sends it by email, cloud drive or Nearby Share; <b>Save to Downloads</b> keeps a copy on the device.</li>
+        <li>On the laptop, open the Acoustic Monitoring Software, choose <b>Import</b> and pick the .zip. The session, audio, details and photos arrive ready to bind to the meter's file.</li>
+        <li>The field sheet is produced on the laptop once the meter's file is bound, because its results come from the meter. What you entered here fills the rest of it.</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>If something goes wrong</summary>
+      <ul>
+        <li><b>"Permission denied"</b> on export or the microphone: try again first. The browser sometimes refuses the first attempt.</li>
+        <li>If it keeps failing, check this site's permissions in your browser's settings (<i>Site settings</i> or <i>Privacy</i>, or the padlock or site icon next to the address). Allow the microphone and don't block downloads.</li>
+        <li>If sharing is refused, the file is saved to Downloads instead.</li>
+        <li>Nothing is lost by retrying: sessions stay saved on the device until you delete them.</li>
+      </ul>
+    </details>
+
+    <div class="row" style="margin-top:12px"><button class="primary" id="help-close">Close</button></div>
   </dialog>
 
   <script src="app.js"></script>

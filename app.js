@@ -525,7 +525,9 @@ function renderObservations() {
     li.innerHTML = `<div class="when"></div><div class="what"><div class="txt"></div>
       <div class="cat"></div></div>`;
     li.querySelector('.when').textContent = when;
-    li.querySelector('.txt').textContent = o.note;
+    // The stored placeholder matches the Windows app; on a tablet it's tapped.
+    li.querySelector('.txt').textContent =
+      o.note === PLACEHOLDER_NOTE ? '(no description — tap to add one)' : o.note;
     li.querySelector('.cat').textContent = o.category;
     if (o.photos && o.photos.length) {
       const cam = document.createElement('span');
@@ -1010,7 +1012,10 @@ async function exportSession(s) {
     return;
   }
   banner('');
-  const canShare = !!(navigator.canShare && navigator.canShare({ files: [exportReady.file] }));
+  // Share only on touch devices: desktop browsers often offer it but then
+  // refuse files ("Permission denied"), so there Save is the only button.
+  const touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const canShare = touch && !!(navigator.canShare && navigator.canShare({ files: [exportReady.file] }));
   $('export-name').textContent =
     `${exportReady.filename} (${(exportReady.blob.size / 1048576).toFixed(1)} MB)`;
   $('export-share').classList.toggle('hidden', !canShare);
@@ -1024,8 +1029,11 @@ async function shareExport() {
     banner(`Shared ${exportReady.filename}. Import it in the Acoustic Monitoring Software on the laptop.`, 'warn');
   } catch (e) {
     if (e && e.name === 'AbortError') return;   // share sheet closed without choosing
-    banner(`Sharing failed (${e.message || e}). Tap Export again, or use Save to Downloads. If it keeps ` +
-           'failing, check the site’s permissions in Chrome: ⋮, Settings, Site settings.', 'err');
+    // Sharing refused: save the file instead, so the export still succeeds.
+    saveExport();
+    banner(`Sharing wasn't allowed (${e.message || e}), so the file was saved to Downloads instead: ` +
+           `${exportReady.filename}. To share directly next time, allow this site to share in your ` +
+           'browser’s site settings.', 'warn');
   }
 }
 

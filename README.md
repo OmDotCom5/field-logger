@@ -16,7 +16,7 @@ A browser only allows the microphone and offline use on a page from an `https://
 
 A company intranet server with HTTPS would work the same way and keep it in-house.
 
-**2. Install on each tablet (once).** With a connection, open that address in Chrome, then *menu (⋮), Add to Home screen* (or *Install app*). Allow the microphone when first asked. Wait until the top of the screen says **Ready offline ✓**; from then on, open it from the home screen icon and it works in flight mode.
+**2. Install on each tablet (once).** With a connection, open that address in the tablet's browser (Chrome, Edge, Samsung Internet, Vivaldi and other modern browsers work), then use its menu's *Add to Home screen* or *Install app*. Allow the microphone when first asked. Wait until the top of the screen says **Ready offline ✓**; from then on, open it from the home screen icon and it works in flight mode.
 
 **Updates:** change the files on the host. Tablets pick up the new version the next time the app is opened with a connection.
 
@@ -35,6 +35,7 @@ Keep the app on screen while logging. The screen stays awake, but switching to a
 1. In Field Logger, press **Export** on the session. Share it (email, Drive, Nearby Share) or save it to Downloads, and get it onto the laptop.
 2. In the Acoustic Monitoring Software, **Import** and choose the `.zip`. It appears as a live session with its observations and audio.
 3. Import the meter's file and bind it to that session, as for a session logged on the laptop.
+4. Export the field sheet. It is available once the meter's file is bound, because its results come from the meter; the site details, observations and noise environment entered on the tablet fill the rest of it.
 
 ## The export file
 
